@@ -1,53 +1,49 @@
-from db.connection import connect_db
-from classifier.email_classifier import classify_email
-from utils.constants import candidate_labels, label_mapping
-from escalation.escalator import Escalator
+import os
+from dotenv import load_dotenv
 
-# Function to fetch unclassified emails
-def fetch_unclassified_emails(cursor):
-    cursor.execute("""
-        SELECT email_id, subject, body
-        FROM emails
-        WHERE classified_category IS NULL
-    """)
-    return cursor.fetchall()
+from database.db_connection import connect_to_postgres, verify_existing_table
+from email.email_processor import fetch_emails_imap
+
+def main():
+    """Main function to run the email processing script."""
+    # Load environment variables
+    load_dotenv()
+    
+    # Get database connection parameters from environment variables
+    db_params = {
+        'dbname': os.getenv('DB_NAME'),
+        'user': os.getenv('DB_USER'),
+        'password': os.getenv('DB_PASSWORD'),
+        'host': os.getenv('DB_HOST'),
+        'port': os.getenv('DB_PORT', '5432')
+    }
+    
+    # Get Gmail credentials from environment variables
+    gmail_username = os.getenv('GMAIL_USERNAME')
+    gmail_password = os.getenv('GMAIL_PASSWORD')
+    
+    if not all([gmail_username, gmail_password]):
+        print("Error: Gmail credentials not found in environment variables")
+        return
+    
+    try:
+        # Connect to PostgreSQL
+        conn = connect_to_postgres(db_params)
+        if not conn:
+            return
+        
+        # Verify the emails table exists
+        if not verify_existing_table(conn):
+            return
+        
+        # Fetch and process emails
+        fetch_emails_imap(gmail_username, gmail_password, conn)
+        
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 if __name__ == "__main__":
-    # Establish DB connection
-    conn = connect_db()
-    if not conn:
-        raise Exception("❌ Failed to connect to the database")
-
-    cursor = conn.cursor()
-
-    escalator = Escalator(cursor=cursor, conn=conn, threshold=0.5)
-
-    # Fetch emails
-    emails_to_classify = fetch_unclassified_emails(cursor)
-
-    # Loop through each and classify
-    for email_id, subject, body in emails_to_classify:
-        predicted_label, confidence = classify_email(subject, body, candidate_labels)
-
-        if escalator.should_escalate(confidence):
-            reason = f"Confidence below threshold: {confidence:.2f}"
-            escalator.escalate(email_id, reason)
-            cursor.execute("""
-                UPDATE emails
-                SET classified_category = %s,
-                    escalated = TRUE
-                WHERE email_id = %s
-            """, (predicted_label, email_id))
-        else:
-            cursor.execute("""
-                UPDATE emails
-                SET classified_category = %s,
-                    escalated = FALSE
-                WHERE email_id = %s
-            """, (predicted_label, email_id))
-
-        conn.commit()
-
-        print(f"📩 Email ID {email_id}")
-        print(f"🧠 Predicted: {predicted_label}")
-        print(f"📈 Confidence: {round(confidence, 2)}\n")
+    main() 

@@ -2,6 +2,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2
 import datetime
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 app = Flask(__name__)
 CORS(app)
@@ -14,6 +17,36 @@ conn = psycopg2.connect(
     password="avantichhaya"
 )
 cursor = conn.cursor()
+
+# Email configuration
+SMTP_USERNAME = "avanaya3@gmail.com"
+SMTP_PASSWORD = "eivp yrwm qfxi qimn"
+
+def send_email_response(sender_email, subject, response_body):
+    """Send email response using SMTP."""
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USERNAME
+        msg['To'] = sender_email
+        msg['Subject'] = f"Re: {subject}"
+
+        # Add body
+        msg.attach(MIMEText(response_body, 'plain'))
+
+        # Connect to Gmail's SMTP server
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+
+        # Send email
+        server.send_message(msg)
+        server.quit()
+        
+        print(f"Response sent to {sender_email}")
+        return True
+    except Exception as e:
+        print(f"Error sending email response: {e}")
+        return False
 
 #########################################
 # 📌 GET: Fetch escalated emails only
@@ -50,24 +83,45 @@ def update_email():
     data = request.json
     email_id = data.get("email_id")
     updated_category = data.get("updated_category")
-    response_text = data.get("response")   # We will NOT save this to the DB
+    response_text = data.get("response")
     learn = data.get("learn")  # True/False
 
     try:
-        # ✅ Update category and learn only
+        # First get the sender's email and subject
+        cursor.execute("""
+            SELECT sender_email, subject
+            FROM emails
+            WHERE email_id = %s
+        """, (email_id,))
+        result = cursor.fetchone()
+        if not result:
+            return jsonify({"error": "Email not found"}), 404
+            
+        sender_email, subject = result
+
+        # Send the response email
+        if response_text:
+            email_sent = send_email_response(sender_email, subject, response_text)
+            if not email_sent:
+                return jsonify({"error": "Failed to send email response"}), 500
+
+        # Update category, learn, response, and status
         cursor.execute("""
             UPDATE emails
             SET classified_category = %s,
-                learn = %s
+                learn = %s,
+                response_body = %s,
+                status = 'RESPONDED',
+                responded_at = %s
             WHERE email_id = %s
-        """, (updated_category, learn, email_id))
+        """, (updated_category, learn, response_text, datetime.datetime.now(), email_id))
 
         conn.commit()
 
         print(f"✅ Updated email {email_id} → Category: {updated_category} | Learn: {learn}")
-        print(f"📝 Response entered by admin (not saved to DB): {response_text}")
+        print(f"📝 Response saved and sent to: {sender_email}")
 
-        return jsonify({"message": "Category and learn status updated successfully!"})
+        return jsonify({"message": "Email updated and response sent successfully!"})
 
     except Exception as e:
         conn.rollback()

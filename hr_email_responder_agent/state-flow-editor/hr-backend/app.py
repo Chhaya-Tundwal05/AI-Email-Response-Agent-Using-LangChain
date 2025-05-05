@@ -21,7 +21,7 @@ cursor = conn.cursor()
 @app.route("/api/escalations", methods=["GET"])
 def get_escalations():
     cursor.execute("""
-        SELECT email_id, sender_email, subject, body, received_at, classified_category
+        SELECT email_id, sender_email, subject, body, received_at, classified_category, learn
         FROM emails
         WHERE classified_category = 'human_intervention'
     """)
@@ -36,13 +36,14 @@ def get_escalations():
             "subject": row[2],
             "body": row[3],
             "received_at": row[4].strftime('%Y-%m-%d %H:%M:%S'),
-            "classified_category": row[5]
+            "classified_category": row[5],
+            "learn": row[6]  # can be None, True, or False
         })
 
     return jsonify(data)
 
 #########################################
-# 📌 POST: Update category and capture learn choice
+# 📌 POST: Update category and learn value
 #########################################
 @app.route("/api/update_email", methods=["POST"])
 def update_email():
@@ -53,22 +54,20 @@ def update_email():
     learn = data.get("learn")  # True/False
 
     try:
-        # ✅ Update only the category — keep status and escalated unchanged
+        # ✅ Update category and learn only
         cursor.execute("""
             UPDATE emails
-            SET classified_category = %s
+            SET classified_category = %s,
+                learn = %s
             WHERE email_id = %s
-        """, (updated_category, email_id))
+        """, (updated_category, learn, email_id))
 
         conn.commit()
 
-        print(f"✅ Updated email {email_id} with new category: {updated_category}")
+        print(f"✅ Updated email {email_id} → Category: {updated_category} | Learn: {learn}")
         print(f"📝 Response entered by admin (not saved to DB): {response_text}")
 
-        if learn:
-            print(f"🧠 Email {email_id} marked for learning!")
-
-        return jsonify({"message": "Category updated successfully!"})
+        return jsonify({"message": "Category and learn status updated successfully!"})
 
     except Exception as e:
         conn.rollback()

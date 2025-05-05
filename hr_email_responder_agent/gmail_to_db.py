@@ -14,7 +14,6 @@ import urllib3
 import certifi
 import hashlib
 import json
-from huggingface_hub import snapshot_download
 import requests
 
 # Disable SSL verification warnings
@@ -180,78 +179,19 @@ def parse_date(date_str):
     except Exception:
         return datetime.now()
 
-def download_model_locally():
-    """Download model files locally to avoid SSL issues."""
-    from huggingface_hub import snapshot_download
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    
-    # Create a directory for the model
-    model_dir = "local_models/bart-large-mnli"
-    os.makedirs(model_dir, exist_ok=True)
-    
-    try:
-        # Download model files
-        snapshot_download(
-            repo_id="facebook/bart-large-mnli",
-            local_dir=model_dir,
-            local_dir_use_symlinks=False,
-            ignore_patterns=["*.msgpack", "*.h5", "*.safetensors"],
-            token=None,
-            verify_ssl=False
-        )
-        return model_dir
-    except Exception as e:
-        print(f"Error downloading model: {e}")
-        return None
-
 def get_classifier():
     """Initialize and return the email classifier."""
     try:
-        # First try to load from local directory
-        model_dir = "local_models/bart-large-mnli"
-        if not os.path.exists(model_dir):
-            print("Model not found locally. Downloading...")
-            model_dir = download_model_locally()
-            if not model_dir:
-                raise Exception("Failed to download model")
-
-        # Setup classifier with local model
+        # Setup classifier with online model
         classifier = pipeline(
             "zero-shot-classification",
-            model=model_dir,
-            trust_remote_code=True,
+            model="facebook/bart-large-mnli",
             device_map="auto"
         )
         return classifier
     except Exception as e:
         print(f"Error loading model: {e}")
-        print("Trying alternative model loading method...")
-        try:
-            # Alternative method with SSL verification disabled
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
-            model = AutoModelForSequenceClassification.from_pretrained(
-                "facebook/bart-large-mnli",
-                trust_remote_code=True,
-                local_files_only=True,
-                use_auth_token=None,
-                verify_ssl=False
-            )
-            tokenizer = AutoTokenizer.from_pretrained(
-                "facebook/bart-large-mnli",
-                trust_remote_code=True,
-                local_files_only=True,
-                use_auth_token=None,
-                verify_ssl=False
-            )
-            return pipeline(
-                "zero-shot-classification",
-                model=model,
-                tokenizer=tokenizer,
-                device_map="auto"
-            )
-        except Exception as e:
-            print(f"Failed to load model: {e}")
-            return None
+        return None
 
 def classify_email(classifier, subject, body):
     """Classify an email using the classifier."""
@@ -656,12 +596,16 @@ def extract_thread_id(msg, email_id, sender_email):
         message_id = in_reply_to if in_reply_to else references.split()[-1]
         # Clean the message ID (remove < and >)
         message_id = message_id.strip('<>')
-        return message_id
+        # Convert message ID to a numeric hash
+        return int(hashlib.md5(message_id.encode()).hexdigest(), 16) % (10**9)
     
     # For new emails, create a unique thread ID
-    # Combine email_id and sender's username (part before @)
-    sender_username = sender_email.split('@')[0]
-    thread_id = f"{email_id}_{sender_username}"
+    # Convert binary email_id to integer
+    email_id_int = int(email_id.decode('utf-8')) if isinstance(email_id, bytes) else int(email_id)
+    # Create a numeric hash of the sender email
+    sender_hash = int(hashlib.md5(sender_email.encode()).hexdigest(), 16) % (10**6)
+    # Combine to create a unique thread ID
+    thread_id = (email_id_int * 1000000) + sender_hash
     return thread_id
 
 def get_email_thread_id(conn, message_id):
